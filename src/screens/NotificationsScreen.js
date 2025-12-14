@@ -145,7 +145,13 @@ export default function NotificationsScreen() {
     }
   }, []);
   const receiverDocListenersRef = useRef({});
+  const receiverDocMapRef = useRef({});
   const [receiverDocMap, setReceiverDocMap] = useState({});
+
+  const flushReceiverDocMap = useCallback(() => {
+    setReceiverDocMap({ ...receiverDocMapRef.current });
+  }, []);
+
   const detachReceiverDocListeners = useCallback(() => {
     Object.values(receiverDocListenersRef.current).forEach((unsubscribe) => {
       try {
@@ -155,23 +161,21 @@ export default function NotificationsScreen() {
       }
     });
     receiverDocListenersRef.current = {};
+    receiverDocMapRef.current = {};
     setReceiverDocMap({});
-  }, [setReceiverDocMap]);
-  const upsertReceiverDocEntry = useCallback((docId, data) => {
-    setReceiverDocMap((prev) => {
-      const next = { ...prev };
-      if (!data) {
-        if (next[docId]) {
-          delete next[docId];
-          return next;
-        }
-        return prev;
-      }
+  }, []);
 
-      next[docId] = data;
-      return next;
-    });
-  }, [setReceiverDocMap]);
+  const upsertReceiverDocEntry = useCallback((docId, data) => {
+    if (!data) {
+      if (receiverDocMapRef.current[docId]) {
+        delete receiverDocMapRef.current[docId];
+        flushReceiverDocMap();
+      }
+      return;
+    }
+    receiverDocMapRef.current[docId] = data;
+    flushReceiverDocMap();
+  }, [flushReceiverDocMap]);
   const buildReceiverResponses = useCallback(
     (docs) => {
       if (!Array.isArray(docs) || docs.length === 0) {
@@ -669,9 +673,8 @@ export default function NotificationsScreen() {
     return () => {
       unsubscribe();
       detachReceiverDocListeners();
-      setReceiverDocMap({});
     };
-  }, [auth.currentUser?.uid, detachReceiverDocListeners, upsertReceiverDocEntry]);
+  }, [auth.currentUser?.uid]);
 
   useEffect(() => {
     const docEntries = Object.entries(receiverDocMap)
