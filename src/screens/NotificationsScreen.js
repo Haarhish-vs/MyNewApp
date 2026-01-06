@@ -17,46 +17,15 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import { sendPushNotification } from '../services/backendClient';
 import { fetchUserFcmToken } from '../services/userService';
 
-const skeletonPlaceholders = [0, 1];
-
-const SkeletonLine = ({ width = '100%', height = 12 }) => (
-  <View style={[styles.skeletonLine, { width, height }]} />
-);
-
-const renderRequestSkeletons = () =>
-  skeletonPlaceholders.map((index) => (
-    <View key={`request-skeleton-${index}`} style={[styles.card, styles.requestCard, styles.skeletonCard]}>
-      <View style={[styles.skeletonBadge, { width: 120 }]} />
-      <View style={styles.skeletonBody}>
-        <SkeletonLine width="70%" />
-        <SkeletonLine width="50%" />
-        <SkeletonLine width="90%" />
-        <SkeletonLine width="60%" />
-        <SkeletonLine width="80%" />
-      </View>
-      <View style={styles.skeletonButtonRow}>
-        <View style={styles.skeletonButton} />
-        <View style={styles.skeletonButton} />
-      </View>
-    </View>
-  ));
-
-const renderResponseSkeletons = () =>
-  skeletonPlaceholders.map((index) => (
-    <View key={`response-skeleton-${index}`} style={[styles.card, styles.responseCard, styles.skeletonCard]}>
-      <View style={[styles.skeletonBadge, { width: 150 }]} />
-      <View style={styles.skeletonBody}>
-        <SkeletonLine width="80%" />
-        <SkeletonLine width="60%" />
-        <SkeletonLine width="55%" />
-        <SkeletonLine width="75%" />
-        <SkeletonLine width="45%" />
-      </View>
-      <View style={styles.skeletonButtonRow}>
-        <View style={[styles.skeletonButton, { width: '60%' }]} />
-      </View>
-    </View>
-  ));
+const dedupeById = (items = []) => {
+  const map = new Map();
+  items.forEach((item) => {
+    if (item?.id && !map.has(item.id)) {
+      map.set(item.id, item);
+    }
+  });
+  return Array.from(map.values());
+};
 
 export default function NotificationsScreen() {
   const navigation = useNavigation();
@@ -73,13 +42,14 @@ export default function NotificationsScreen() {
   const [userLoading, setUserLoading] = useState(true);
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [responsesLoading, setResponsesLoading] = useState(true);
-  const [requestsReady, setRequestsReady] = useState(false);
-  const [responsesReady, setResponsesReady] = useState(false);
+  const [requestsFetched, setRequestsFetched] = useState(false);
+  const [responsesFetched, setResponsesFetched] = useState(false);
   const [receiverDocs, setReceiverDocs] = useState([]);
   const [hasReceiverRequests, setHasReceiverRequests] = useState(false);
   const [donorProfile, setDonorProfile] = useState(null);
   const [donorCity, setDonorCity] = useState('');
   const [donorBloodGroup, setDonorBloodGroup] = useState('');
+  const [acceptedRequestId, setAcceptedRequestId] = useState(null);
   const matchingCity = donorCity || userCity;
   const matchingBloodGroup = donorBloodGroup || userBloodGroup;
 
@@ -487,12 +457,13 @@ export default function NotificationsScreen() {
       setRequests([]);
       setNewNotificationCount(0);
       setRequestsLoading(false);
-      setRequestsReady(false);
+      setRequestsFetched(true);
       return () => {};
     }
 
-    setRequestsReady(false);
     setRequestsLoading(true);
+    setRequestsFetched(false);
+    setAcceptedRequestId(null);
 
     const donorQuery = query(
       collection(db, 'Bloodreceiver'),
@@ -548,21 +519,21 @@ export default function NotificationsScreen() {
       (snapshot) => {
         try {
           const formatted = buildDonorMatches(snapshot.docs);
-          setRequests(formatted);
+          setRequests(dedupeById(formatted));
           setNewNotificationCount(formatted.filter((item) => item.isNew).length);
         } catch (listenerError) {
           console.error('Error processing donor notifications:', listenerError);
           setRequests([]);
         } finally {
-          setRequestsReady(true);
           setRequestsLoading(false);
+          setRequestsFetched(true);
         }
       },
       (error) => {
         console.error('Error listening to donor notifications:', error);
         setRequests([]);
-        setRequestsReady(true);
         setRequestsLoading(false);
+        setRequestsFetched(true);
       }
     );
 
@@ -578,15 +549,15 @@ export default function NotificationsScreen() {
       detachReceiverDocListeners();
       setResponses([]);
       setResponsesLoading(false);
-      setResponsesReady(false);
+      setResponsesFetched(true);
       setHasReceiverRequests(false);
       setReceiverDocs([]);
       setReceiverDocMap({});
       return () => {};
     }
 
-    setResponsesReady(false);
     setResponsesLoading(true);
+    setResponsesFetched(false);
 
     const receiverQuery = query(
       collection(db, 'Bloodreceiver'),
@@ -654,15 +625,15 @@ export default function NotificationsScreen() {
           console.error('Error processing receiver notifications:', listenerError);
           setResponses([]);
         } finally {
-          setResponsesReady(true);
           setResponsesLoading(false);
+          setResponsesFetched(true);
         }
       },
       (error) => {
         console.error('Error listening to receiver notifications:', error);
         setResponses([]);
-        setResponsesReady(true);
         setResponsesLoading(false);
+        setResponsesFetched(true);
         setHasReceiverRequests(false);
         setReceiverDocs([]);
         detachReceiverDocListeners();
@@ -690,12 +661,16 @@ export default function NotificationsScreen() {
     }
 
     const formatted = buildReceiverResponses(docEntries);
-    setResponses(formatted);
+    setResponses(dedupeById(formatted));
     setNewNotificationCount(formatted.filter((item) => !item.seenByReceiver).length);
   }, [receiverDocMap, buildReceiverResponses]);
 
   // Handle donor accepting a blood request
   const handleAccept = (requestId) => {
+    if (acceptedRequestId && acceptedRequestId !== requestId) {
+      Alert.alert('Request already accepted', 'You can only accept one request at a time.');
+      return;
+    }
     Alert.alert(
       'Accept Blood Request',
       'Are you sure you want to accept this blood donation request?',
@@ -728,12 +703,12 @@ export default function NotificationsScreen() {
                 donorCity: userCity,
               };
               
-              // Update the request document
+              // Update the request document and mark it fulfilled so other donors cannot see it
               await updateDoc(doc(db, 'Bloodreceiver', requestId), {
                 responses: arrayUnion(newResponse),
                 seenBy: arrayUnion(currentUser?.uid),
                 respondedBy: donorName,
-                status: 'accepted',
+                status: 'fulfilled',
                 lastUpdated: serverTimestamp(),
               });
 
@@ -745,7 +720,9 @@ export default function NotificationsScreen() {
               });
               
               // Remove accepted request from local state immediately
-              setRequests(prevRequests => prevRequests.filter(req => req.id !== requestId));
+              setRequests((prevRequests) => prevRequests.filter((req) => req.id !== requestId));
+              setAcceptedRequestId(requestId);
+              setRequestsLoading(false);
               
               // Show success message and navigate to home
               Alert.alert(
@@ -882,24 +859,6 @@ export default function NotificationsScreen() {
     );
   }
 
-  if (userRole === 'donor' && !requestsReady) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="\#b71c1c" />
-        <Text style={styles.loadingText}>Preparing matches...</Text>
-      </View>
-    );
-  }
-
-  if (userRole === 'receiver' && !responsesReady) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="\#b71c1c" />
-        <Text style={styles.loadingText}>Preparing responses...</Text>
-      </View>
-    );
-  }
-
   // No profile state
   if (!userProfile || !userCity || !userBloodGroup) {
     return (
@@ -929,9 +888,10 @@ export default function NotificationsScreen() {
           )}
         </View>
         
-        {requestsLoading && requests.length === 0 ? (
-          <View style={styles.listContent}>
-            {renderRequestSkeletons()}
+        {requestsLoading && !requestsFetched ? (
+          <View style={styles.centerContainer}>
+            <ActivityIndicator size="large" color="#b71c1c" />
+            <Text style={styles.loadingText}>Loading matching requests...</Text>
           </View>
         ) : requests.length === 0 ? (
           <View style={styles.emptyContainer}>
@@ -1035,15 +995,17 @@ export default function NotificationsScreen() {
                 
                 <View style={styles.actionButtons}>
                   <TouchableOpacity 
-                    style={[styles.actionButton, styles.acceptButton]} 
+                    style={[styles.actionButton, styles.acceptButton, acceptedRequestId && acceptedRequestId !== item.id && styles.disabledButton]} 
                     onPress={() => handleAccept(item.id)}
+                    disabled={!!acceptedRequestId && acceptedRequestId !== item.id}
                   >
                     <Text style={styles.actionButtonText}>Accept</Text>
                   </TouchableOpacity>
                   
                   <TouchableOpacity 
-                    style={[styles.actionButton, styles.declineButton]} 
+                    style={[styles.actionButton, styles.declineButton, acceptedRequestId && acceptedRequestId !== item.id && styles.disabledButton]} 
                     onPress={() => handleDecline(item.id)}
+                    disabled={!!acceptedRequestId && acceptedRequestId !== item.id}
                   >
                     <Text style={styles.actionButtonText}>Decline</Text>
                   </TouchableOpacity>
@@ -1082,9 +1044,10 @@ export default function NotificationsScreen() {
         )}
       </View>
       
-      {responsesLoading && responses.length === 0 ? (
-        <View style={styles.listContent}>
-          {renderResponseSkeletons()}
+      {responsesLoading && !responsesFetched ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#b71c1c" />
+          <Text style={styles.loadingText}>Loading donor responses...</Text>
         </View>
       ) : responses.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -1116,21 +1079,7 @@ export default function NotificationsScreen() {
                                    item.requestData.purpose));
             
             if (!hasMinimalData) {
-              // Return a fallback card with guaranteed content when data is corrupted
-              return (
-                <View style={[styles.card, styles.responseCard]}>
-                  <View style={styles.responseHeader}>
-                    <View style={styles.responseBadge}>
-                      <Text style={styles.responseBadgeText}>DONOR RESPONSE</Text>
-                    </View>
-                  </View>
-                  <View style={styles.donorInfo}>
-                    <Text style={{padding: 10, textAlign: 'center'}}>
-                      Loading donor details...
-                    </Text>
-                  </View>
-                </View>
-              );
+              return null;
             }
             
             const donorName = ensureText(item.donorName, 'Anonymous Donor');
@@ -1449,6 +1398,9 @@ const styles = StyleSheet.create({
   declineButton: {
     backgroundColor: '#f44336',
   },
+  disabledButton: {
+    opacity: 0.5,
+  },
   actionButtonText: {
     fontFamily: 'Poppins_600SemiBold',
     fontSize: 14,
@@ -1599,35 +1551,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#fff',
   },
-  skeletonCard: {
-    opacity: 0.9,
-  },
-  skeletonBadge: {
-    height: 18,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 4,
-    marginBottom: 12,
-  },
-  skeletonBody: {
-    gap: 8,
-  },
-  skeletonLine: {
-    height: 12,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 4,
-    marginBottom: 6,
-  },
-  skeletonButtonRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    gap: 12,
-  },
-  skeletonButton: {
-    flex: 1,
-    height: 36,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 6,
-  }
 });
